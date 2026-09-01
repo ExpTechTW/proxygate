@@ -4,6 +4,7 @@ ProxyGate turns public VPN Gate nodes into a managed SOCKS5 proxy. It downloads 
 
 <div align="center">
   <img src="images/nodes.png" alt="node list" width="680" style="max-width: 100%; height: auto; margin: 0 8px 12px 0;" />
+  <br />
   <img src="images/settings.png" alt="settings page" width="680" style="max-width: 100%; height: auto; margin: 0 8px 12px 0;" />
 </div>
 
