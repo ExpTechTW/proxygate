@@ -1,0 +1,10 @@
+.git
+.github
+build
+web/dist
+web/src/node_modules
+web/src/*.tsbuildinfo
+cmd/proxygate/config.json
+cmd/proxygate/proxygate
+config.json
+*.db

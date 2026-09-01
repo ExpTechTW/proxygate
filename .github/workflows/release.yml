@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/src/package-lock.json
+
+      - name: Build web
+        working-directory: web/src
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Upload web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+  binaries:
+    needs: web
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: linux_386
+            goos: linux
+            goarch: "386"
+          - target: linux_amd64
+            goos: linux
+            goarch: amd64
+          - target: linux_arm_v6
+            goos: linux
+            goarch: arm
+            goarm: "6"
+          - target: linux_arm_v7
+            goos: linux
+            goarch: arm
+            goarm: "7"
+          - target: linux_arm64
+            goos: linux
+            goarch: arm64
+          - target: linux_ppc64le
+            goos: linux
+            goarch: ppc64le
+          - target: linux_riscv64
+            goos: linux
+            goarch: riscv64
+          - target: linux_s390x
+            goos: linux
+            goarch: s390x
+          - target: darwin_amd64
+            goos: darwin
+            goarch: amd64
+          - target: darwin_arm64
+            goos: darwin
+            goarch: arm64
+          - target: freebsd_amd64
+            goos: freebsd
+            goarch: amd64
+          - target: freebsd_arm64
+            goos: freebsd
+            goarch: arm64
+          - target: windows_amd64
+            goos: windows
+            goarch: amd64
+            extension: .exe
+          - target: windows_arm64
+            goos: windows
+            goarch: arm64
+            extension: .exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download web assets
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Read release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z.-]+))?$ ]]; then
+            echo "tag must use semantic version format, for example v0.1.0 or v0.1.0-rc.1" >&2
+            exit 1
+          fi
+          echo "VERSION_MAJOR=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+          echo "VERSION_MINOR=${BASH_REMATCH[2]}" >> "$GITHUB_ENV"
+          echo "VERSION_PATCH=${BASH_REMATCH[3]}" >> "$GITHUB_ENV"
+          echo "VERSION_PRE_RELEASE=${BASH_REMATCH[5]}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          BUILD_CHANNEL: github-actions
+          BUILD_TOOLCHAIN: ${{ matrix.target }}
+        run: |
+          make core \
+            CURRENT_VERSION_MAJOR="$VERSION_MAJOR" \
+            CURRENT_VERSION_MINOR="$VERSION_MINOR" \
+            CURRENT_VERSION_PATCH="$VERSION_PATCH" \
+            VERSION_PRE_RELEASE="$VERSION_PRE_RELEASE"
+
+      - name: Package binary
+        shell: bash
+        run: |
+          mkdir -p release
+          archive="proxygate_${RELEASE_VERSION}_${{ matrix.target }}"
+          binary="build/dist/proxygate${{ matrix.extension }}"
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            zip -j "release/${archive}.zip" "$binary"
+          else
+            tar -C build/dist -czf "release/${archive}.tar.gz" "proxygate${{ matrix.extension }}"
+          fi
+
+      - name: Upload binary archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum * > checksums.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release/*

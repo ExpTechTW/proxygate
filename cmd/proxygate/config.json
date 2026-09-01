@@ -1,0 +1,41 @@
+{
+  "sourceUrl": "http://www.vpngate.net/api/iphone/",
+  "dnsServers": [
+    "1.1.1.1:53",
+    "8.8.8.8:53"
+  ],
+  "speedTestUrl": "http://storage.googleapis.com/gcp-public-data-landsat/LC08/01/001/002/LC08_L1GT_001002_20160817_20170322_01_T2/LC08_L1GT_001002_20160817_20170322_01_T2_B1.TIF",
+  "speedTestTimeout": "10s",
+  "refreshInterval": "30m",
+  "filterExpression": "node.countryShort === \"JP\" \u0026\u0026 !node.hostName.includes(\"public-vpn\")",
+  "selectionMode": "speed",
+  "followRankingOnRefresh": false,
+  "socks5": {
+    "listenAddress": "127.0.0.1:1081",
+    "username": "",
+    "password": ""
+  },
+  "monitor": {
+    "url": "https://www.google.com/generate_204",
+    "interval": "30s",
+    "timeout": "10s"
+  },
+  "web": {
+    "listenAddress": "127.0.0.1:8080",
+    "username": "admin",
+    "passwordHash": "$2a$10$vgI/B0N20nOdQifhQ2VN..xf/wonWBqejCiOfTEralZ8S/MiHk5WS",
+    "sessionSecret": "H2N2H6BYZs940VxzAYbX5r6jBYH-7627RL_Lc77HRu4"
+  },
+  "databasePath": "data/proxygate.db",
+  "protocolPriority": [
+    "openvpn_udp",
+    "openvpn_tcp",
+    "softether_https",
+    "sstp",
+    "l2tp"
+  ],
+  "vpnGateUsername": "vpn",
+  "vpnGatePassword": "vpn",
+  "vpnGatePreSharedKey": "vpn",
+  "connectTimeout": "15s"
+}
