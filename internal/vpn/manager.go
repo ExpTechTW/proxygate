@@ -95,6 +95,30 @@ func (m *Manager) DialContext(ctx context.Context, network, address string) (net
 	return session.DialContext(ctx, network, address)
 }
 
+func (m *Manager) ListenPacket(network, address string) (net.PacketConn, error) {
+	m.mu.RLock()
+	session := m.session
+	m.mu.RUnlock()
+	if session == nil {
+		return nil, errors.New("no VPN session is active")
+	}
+	packetSession, ok := session.(packetSession)
+	if !ok {
+		return nil, errors.New("active VPN session does not support datagrams")
+	}
+	return packetSession.ListenPacket(network, address)
+}
+
+func (m *Manager) ResolveIPv4(ctx context.Context, host string) ([]net.IP, error) {
+	m.mu.RLock()
+	session := m.session
+	m.mu.RUnlock()
+	if session == nil {
+		return nil, errors.New("no VPN session is active")
+	}
+	return resolveSessionIPv4(ctx, session, host, m.config.Get().DNSServers)
+}
+
 func (m *Manager) ActiveIP() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -12,6 +12,7 @@ ProxyGate turns public VPN Gate nodes into a managed SOCKS5 proxy. It downloads 
 
 - No elevated permissions or `/dev/net/tun` device required
 - Support for OpenVPN UDP/TCP, SoftEther TLS, SSTP, and L2TP/IPsec
+- SOCKS5 CONNECT and UDP ASSOCIATE support for TCP/UDP clients such as tun2socks
 - Optional SOCKS5 authentication with username and password
 - Automatic ranking, health checks, and failover
 - Manual node and protocol selection
@@ -44,7 +45,7 @@ To print embedded build information, run:
 
 The same data is also exposed via `GET /api/version` without authentication. It describes the running binary only and does not check for updates.
 
-On the first run, `config.json` is created automatically. By default, the web interface listens on `127.0.0.1:8080` with the credentials `admin` / `admin`, and the SOCKS5 proxy listens on `127.0.0.1:1080`. Change the web password after signing in.
+On the first run, `config.json` is created automatically. The web username is `admin`; a random password is generated and printed to the startup log. The default web and SOCKS5 listen addresses are `127.0.0.1:8080` and `127.0.0.1:1080`. Change the web password after signing in.
 
 An empty database triggers an initial source refresh and automatic node selection. If a later refresh fails, the existing nodes remain available.
 
@@ -52,10 +53,10 @@ An empty database triggers an initial source refresh and automatic node selectio
 
 ```sh
 docker build -t proxygate .
-docker run --rm -p 8080:8080 -p 1080:1080 -v proxygate-data:/data proxygate
+docker run --rm -p 8080:8080 -v proxygate-data:/data proxygate
 ```
 
-The container stores its generated configuration and SQLite database in `/data`. The listen addresses and database path can be overridden with `PROXYGATE_WEB_LISTEN_ADDRESS`, `PROXYGATE_SOCKS5_LISTEN_ADDRESS`, and `PROXYGATE_DATABASE_PATH`.
+The container stores its generated configuration and SQLite database in `/data`. The first-run web password is printed by `docker logs`. The Docker default keeps SOCKS5 on `127.0.0.1:1080` inside the container; expose it externally only when required by overriding `PROXYGATE_SOCKS5_LISTEN_ADDRESS` and publishing port `1080`. The listen addresses and database path can be overridden with `PROXYGATE_WEB_LISTEN_ADDRESS`, `PROXYGATE_SOCKS5_LISTEN_ADDRESS`, and `PROXYGATE_DATABASE_PATH`.
 
 Tags such as `v0.1.0` produce GitHub release archives and a multi-platform image in the repository's GHCR package. Pre-release tags such as `v0.1.0-rc.1` are marked accordingly and do not overwrite `latest`.
 
@@ -65,7 +66,7 @@ Settings are stored in local JSON. The web listen address, SOCKS5 listen address
 
 Useful networking settings include:
 
-- `dnsServers`: ordered IPv4 DNS-over-TCP endpoints such as `1.1.1.1:53`
+- `dnsServers`: ordered IPv4 DNS-over-UDP endpoints such as `1.1.1.1:53`
 - `speedTestUrl`: download URL used for manual speed tests
 - `speedTestTimeout`: maximum speed-test duration; partial downloads still produce an average speed
 - `monitor.url`: health-check endpoint

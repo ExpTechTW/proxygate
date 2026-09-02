@@ -24,6 +24,10 @@ type Session interface {
 	Close() error
 }
 
+type packetSession interface {
+	ListenPacket(string, string) (net.PacketConn, error)
+}
+
 type Driver interface {
 	Protocol() string
 	Start(context.Context, model.Node, config.Config, *log.Logger) (Session, error)

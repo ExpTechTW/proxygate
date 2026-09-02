@@ -16,22 +16,31 @@ import (
 )
 
 const (
-	version        = 5
-	methodNone     = 0
-	methodPassword = 2
-	methodRejected = 0xff
-	commandConnect = 1
-	replyOK        = 0
-	replyGeneral   = 1
-	replyCommand   = 7
-	replyAddress   = 8
-	addressIPv4    = 1
-	addressDomain  = 3
-	addressIPv6    = 4
+	version             = 5
+	methodNone          = 0
+	methodPassword      = 2
+	methodRejected      = 0xff
+	commandConnect      = 1
+	commandUDPAssociate = 3
+	replyOK             = 0
+	replyGeneral        = 1
+	replyCommand        = 7
+	replyAddress        = 8
+	addressIPv4         = 1
+	addressDomain       = 3
+	addressIPv6         = 4
 )
 
 type Dialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
+}
+
+type PacketDialer interface {
+	ListenPacket(string, string) (net.PacketConn, error)
+}
+
+type IPv4Resolver interface {
+	ResolveIPv4(context.Context, string) ([]net.IP, error)
 }
 
 type Server struct {
@@ -113,10 +122,18 @@ func (s *Server) handle(ctx context.Context, client net.Conn) error {
 		_ = writeReply(client, replyAddress, nil)
 		return err
 	}
-	if command != commandConnect {
+	switch command {
+	case commandConnect:
+		return s.handleConnect(ctx, client, network, address)
+	case commandUDPAssociate:
+		return s.handleUDPAssociate(ctx, client)
+	default:
 		_ = writeReply(client, replyCommand, nil)
-		return errors.New("only SOCKS5 CONNECT is supported")
+		return errors.New("only SOCKS5 CONNECT and UDP ASSOCIATE are supported")
 	}
+}
+
+func (s *Server) handleConnect(ctx context.Context, client net.Conn, network, address string) error {
 	_ = client.SetDeadline(time.Time{})
 	dialContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -142,6 +159,241 @@ func (s *Server) handle(ctx context.Context, client net.Conn) error {
 	go copyStream(client, upstream)
 	wait.Wait()
 	return nil
+}
+
+func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error {
+	packetDialer, ok := s.dialer.(PacketDialer)
+	if !ok {
+		_ = writeReply(client, replyGeneral, nil)
+		return errors.New("active VPN session does not support UDP ASSOCIATE")
+	}
+	network, localAddress, err := udpRelayAddress(client)
+	if err != nil {
+		_ = writeReply(client, replyGeneral, nil)
+		return err
+	}
+	relay, err := net.ListenUDP(network, localAddress)
+	if err != nil {
+		_ = writeReply(client, replyGeneral, nil)
+		return fmt.Errorf("listen for SOCKS5 UDP relay: %w", err)
+	}
+	defer relay.Close()
+
+	upstreams := make(map[string]net.PacketConn, 2)
+	for _, upstreamNetwork := range []string{"udp4", "udp6"} {
+		upstream, listenErr := packetDialer.ListenPacket(upstreamNetwork, ":0")
+		if listenErr != nil {
+			if upstreamNetwork == "udp4" {
+				_ = writeReply(client, replyGeneral, nil)
+				return fmt.Errorf("open VPN %s datagram socket: %w", upstreamNetwork, listenErr)
+			}
+			continue
+		}
+		upstreams[upstreamNetwork] = upstream
+		defer upstream.Close()
+	}
+	if len(upstreams) == 0 {
+		_ = writeReply(client, replyGeneral, nil)
+		return errors.New("VPN session does not provide a datagram socket")
+	}
+	if err := writeReply(client, replyOK, relay.LocalAddr()); err != nil {
+		return err
+	}
+	_ = client.SetDeadline(time.Time{})
+
+	type datagram struct {
+		data   []byte
+		from   net.Addr
+		source string
+		err    error
+	}
+	packets := make(chan datagram, len(upstreams)+1)
+	associationDone := make(chan struct{})
+	defer close(associationDone)
+	readPackets := func(source string, connection net.PacketConn) {
+		for {
+			buffer := make([]byte, 64*1024)
+			n, address, readErr := connection.ReadFrom(buffer)
+			packet := datagram{data: append([]byte(nil), buffer[:n]...), from: address, source: source, err: readErr}
+			select {
+			case packets <- packet:
+			case <-ctx.Done():
+				return
+			case <-associationDone:
+				return
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}
+	go readPackets("local", relay)
+	for upstreamNetwork, upstream := range upstreams {
+		go readPackets(upstreamNetwork, upstream)
+	}
+	var clientUDPAddress net.Addr
+	controlClosed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, client)
+		close(controlClosed)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-controlClosed:
+			return nil
+		case packet := <-packets:
+			if packet.err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("read SOCKS5 UDP %s datagram: %w", packet.source, packet.err)
+			}
+			if packet.source == "local" {
+				clientUDPAddress = packet.from
+				requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				err := s.forwardUDPRequest(requestCtx, packet.data, upstreams)
+				cancel()
+				if err != nil {
+					s.logger.Printf("[socks5] UDP request error: %v", err)
+				}
+				continue
+			}
+			response, err := marshalUDPResponse(packet.from, packet.data)
+			if err != nil {
+				s.logger.Printf("[socks5] UDP response error: %v", err)
+				continue
+			}
+			if clientUDPAddress == nil {
+				continue
+			}
+			if _, err := relay.WriteTo(response, clientUDPAddress); err != nil {
+				s.logger.Printf("[socks5] write UDP response: %v", err)
+			}
+		}
+	}
+}
+
+func (s *Server) forwardUDPRequest(ctx context.Context, data []byte, upstreams map[string]net.PacketConn) error {
+	host, port, payload, err := parseUDPRequest(data)
+	if err != nil {
+		return err
+	}
+	var destination *net.UDPAddr
+	if ip := net.ParseIP(host); ip != nil {
+		destination = &net.UDPAddr{IP: ip, Port: port}
+	} else {
+		resolver, ok := s.dialer.(IPv4Resolver)
+		if !ok {
+			return errors.New("VPN session does not support UDP domain resolution")
+		}
+		addresses, resolveErr := resolver.ResolveIPv4(ctx, host)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve UDP destination %s: %w", host, resolveErr)
+		}
+		if len(addresses) == 0 || addresses[0].To4() == nil {
+			return fmt.Errorf("resolve UDP destination %s: no IPv4 address", host)
+		}
+		destination = &net.UDPAddr{IP: addresses[0].To4(), Port: port}
+	}
+	network := "udp6"
+	if destination.IP.To4() != nil {
+		network = "udp4"
+		destination.IP = destination.IP.To4()
+	} else {
+		destination.IP = destination.IP.To16()
+	}
+	upstream := upstreams[network]
+	if upstream == nil {
+		return fmt.Errorf("VPN session does not support %s datagrams", network)
+	}
+	if _, err := upstream.WriteTo(payload, destination); err != nil {
+		return fmt.Errorf("write VPN UDP datagram to %s: %w", destination, err)
+	}
+	return nil
+}
+
+func udpRelayAddress(client net.Conn) (string, *net.UDPAddr, error) {
+	local, ok := client.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		return "", nil, errors.New("SOCKS5 client does not have a TCP local address")
+	}
+	ip := append(net.IP(nil), local.IP...)
+	if ip == nil || ip.IsUnspecified() {
+		if local.IP.To4() != nil || ip == nil {
+			return "udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, nil
+		}
+		return "udp6", &net.UDPAddr{IP: net.ParseIP("::1")}, nil
+	}
+	if ip.To4() != nil {
+		return "udp4", &net.UDPAddr{IP: ip.To4()}, nil
+	}
+	return "udp6", &net.UDPAddr{IP: ip.To16()}, nil
+}
+
+func parseUDPRequest(data []byte) (string, int, []byte, error) {
+	if len(data) < 4 || data[0] != 0 || data[1] != 0 {
+		return "", 0, nil, errors.New("invalid SOCKS5 UDP request")
+	}
+	if data[2] != 0 {
+		return "", 0, nil, errors.New("SOCKS5 UDP fragmentation is not supported")
+	}
+	offset := 4
+	var host string
+	switch data[3] {
+	case addressIPv4:
+		if len(data) < offset+net.IPv4len {
+			return "", 0, nil, errors.New("truncated SOCKS5 UDP IPv4 address")
+		}
+		host = net.IP(data[offset : offset+net.IPv4len]).String()
+		offset += net.IPv4len
+	case addressIPv6:
+		if len(data) < offset+net.IPv6len {
+			return "", 0, nil, errors.New("truncated SOCKS5 UDP IPv6 address")
+		}
+		host = net.IP(data[offset : offset+net.IPv6len]).String()
+		offset += net.IPv6len
+	case addressDomain:
+		if len(data) < offset+1 {
+			return "", 0, nil, errors.New("truncated SOCKS5 UDP domain length")
+		}
+		length := int(data[offset])
+		offset++
+		if length == 0 || len(data) < offset+length {
+			return "", 0, nil, errors.New("invalid SOCKS5 UDP domain")
+		}
+		host = string(data[offset : offset+length])
+		offset += length
+	default:
+		return "", 0, nil, errors.New("unsupported SOCKS5 UDP address type")
+	}
+	if len(data) < offset+2 {
+		return "", 0, nil, errors.New("truncated SOCKS5 UDP port")
+	}
+	port := int(binary.BigEndian.Uint16(data[offset : offset+2]))
+	return host, port, data[offset+2:], nil
+}
+
+func marshalUDPResponse(address net.Addr, payload []byte) ([]byte, error) {
+	udpAddress, ok := address.(*net.UDPAddr)
+	if !ok || udpAddress == nil || udpAddress.IP == nil {
+		return nil, errors.New("VPN UDP response has no address")
+	}
+	ip := udpAddress.IP
+	response := []byte{0, 0, 0}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		response = append(response, addressIPv4)
+		response = append(response, ipv4...)
+	} else if ipv6 := ip.To16(); ipv6 != nil {
+		response = append(response, addressIPv6)
+		response = append(response, ipv6...)
+	} else {
+		return nil, errors.New("VPN UDP response has an invalid address")
+	}
+	response = binary.BigEndian.AppendUint16(response, uint16(udpAddress.Port))
+	return append(response, payload...), nil
 }
 
 func negotiate(connection net.Conn, username, password string) error {
@@ -258,8 +510,11 @@ func readRequest(connection net.Conn) (byte, string, string, error) {
 
 func writeReply(connection net.Conn, status byte, address net.Addr) error {
 	ip, port := net.IPv4zero, 0
-	if tcpAddress, ok := address.(*net.TCPAddr); ok {
-		ip, port = tcpAddress.IP, tcpAddress.Port
+	switch socketAddress := address.(type) {
+	case *net.TCPAddr:
+		ip, port = socketAddress.IP, socketAddress.Port
+	case *net.UDPAddr:
+		ip, port = socketAddress.IP, socketAddress.Port
 	}
 	if ipv4 := ip.To4(); ipv4 != nil {
 		reply := append([]byte{version, status, 0, addressIPv4}, ipv4...)

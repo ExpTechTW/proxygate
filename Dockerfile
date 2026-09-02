@@ -45,7 +45,7 @@ COPY --from=runtime-files /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-c
 COPY --from=runtime-files /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /build_src/build/dist/proxygate /proxygate
 ENV PROXYGATE_WEB_LISTEN_ADDRESS="[::]:8080" \
-    PROXYGATE_SOCKS5_LISTEN_ADDRESS="[::]:1080" \
+    PROXYGATE_SOCKS5_LISTEN_ADDRESS="127.0.0.1:1080" \
     PROXYGATE_DATABASE_PATH="/data/proxygate.db"
 WORKDIR /data
 VOLUME ["/data"]

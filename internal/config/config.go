@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -70,7 +71,16 @@ type Web struct {
 }
 
 func Default() Config {
-	hash, _ := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
+	value, _ := defaultConfig()
+	return value
+}
+
+func defaultConfig() (Config, string) {
+	password := randomPassword()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		panic(fmt.Sprintf("generate initial web password hash: %v", err))
+	}
 	return Config{
 		SourceURL: DefaultSourceURL, RefreshInterval: "30m", FilterExpression: "true",
 		SelectionMode: "speed", FollowRankingOnRefresh: true,
@@ -81,7 +91,7 @@ func Default() Config {
 		DNSServers: append([]string(nil), defaultDNSServers...), SpeedTestURL: DefaultSpeedTestURL, SpeedTestTimeout: "45s",
 		ProtocolPriority: []string{model.ProtocolOpenVPNUDP, model.ProtocolOpenVPNTCP, model.ProtocolSoftEtherTLS, model.ProtocolSSTP, model.ProtocolL2TP},
 		VPNGateUsername:  "vpn", VPNGatePassword: "vpn", VPNGatePreSharedKey: "vpn",
-	}
+	}, password
 }
 
 func (c Config) Validate() error {
@@ -206,11 +216,22 @@ type Store struct {
 }
 
 func Load(path string) (*Store, error) {
+	return load(path, nil)
+}
+
+// LoadWithLogger behaves like Load and reports the generated first-run
+// password exactly once, when a configuration file is created.
+func LoadWithLogger(path string, logger *log.Logger) (*Store, error) {
+	return load(path, logger)
+}
+
+func load(path string, logger *log.Logger) (*Store, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 	var value Config
+	initialPassword := ""
 	data, readErr := os.ReadFile(absolute)
 	if readErr == nil {
 		if err := requireCurrentConfigFields(data); err != nil {
@@ -225,7 +246,7 @@ func Load(path string) (*Store, error) {
 			return nil, errors.New("decode config: trailing JSON data")
 		}
 	} else if errors.Is(readErr, os.ErrNotExist) {
-		value = Default()
+		value, initialPassword = defaultConfig()
 	} else {
 		return nil, fmt.Errorf("read config: %w", readErr)
 	}
@@ -240,6 +261,9 @@ func Load(path string) (*Store, error) {
 	if errors.Is(readErr, os.ErrNotExist) {
 		if err := store.Save(value); err != nil {
 			return nil, err
+		}
+		if logger != nil {
+			logger.Printf("[config] generated first-run web password for %s: %s", value.Web.Username, initialPassword)
 		}
 	}
 	return store, nil
@@ -336,9 +360,17 @@ func (s *Store) Save(value Config) error {
 }
 
 func randomSecret() string {
-	data := make([]byte, 32)
+	return base64.RawURLEncoding.EncodeToString(randomBytes(32))
+}
+
+func randomPassword() string {
+	return base64.RawURLEncoding.EncodeToString(randomBytes(18))
+}
+
+func randomBytes(size int) []byte {
+	data := make([]byte, size)
 	if _, err := rand.Read(data); err != nil {
-		return "replace-this-session-secret"
+		panic(fmt.Sprintf("read cryptographic randomness: %v", err))
 	}
-	return base64.RawURLEncoding.EncodeToString(data)
+	return data
 }

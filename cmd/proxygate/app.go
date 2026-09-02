@@ -35,7 +35,7 @@ func executablePath() (string, error) {
 }
 
 func appStart(args arguments, logger *log.Logger) error {
-	configStore, err := config.Load(args.configPath)
+	configStore, err := config.LoadWithLogger(args.configPath, logger)
 	if err != nil {
 		return err
 	}
