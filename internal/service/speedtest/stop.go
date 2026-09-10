@@ -15,7 +15,7 @@ func (s *Service) Stop(ctx context.Context) error {
 	s.cancel()
 	select {
 	case <-s.done:
-		s.cancel, s.queue, s.done = nil, nil, nil
+		s.ctx, s.cancel, s.queue, s.done = nil, nil, nil, nil
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("stop speed-test service: %w", ctx.Err())

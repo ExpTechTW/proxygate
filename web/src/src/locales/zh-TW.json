@@ -102,7 +102,10 @@
     "reconnectProtocol": "以此協議重連",
     "switch": "切換至此節點",
     "speedTestTitle": "執行獨立 VPN 測速",
+    "cancelSpeedTestTitle": "取消目前的 VPN 測速",
     "testing": "測速中",
+    "cancelTest": "取消測速",
+    "cancelingTest": "取消中",
     "speedTest": "測速",
     "speedTestFailed": "測速失敗"
   },

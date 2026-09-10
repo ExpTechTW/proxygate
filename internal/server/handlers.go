@@ -121,6 +121,18 @@ func (s *Server) startSpeedTest(c fiber.Ctx) error {
 	return writeJSON(c, fiber.StatusAccepted, result)
 }
 
+func (s *Server) cancelSpeedTest(c fiber.Ctx) error {
+	result, err := s.speedTests.CancelManual(strings.Clone(c.Params("ip")))
+	if err != nil {
+		status := fiber.StatusConflict
+		if errors.Is(err, speedtest.ErrNotFound) {
+			status = fiber.StatusNotFound
+		}
+		return writeError(c, status, err.Error())
+	}
+	return writeJSON(c, fiber.StatusOK, result)
+}
+
 func (s *Server) speedTestStatus(c fiber.Ctx) error {
 	ip := c.Params("ip")
 	if result, exists := s.speedTests.Result(ip); exists {

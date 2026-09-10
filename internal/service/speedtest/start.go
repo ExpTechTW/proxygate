@@ -16,15 +16,15 @@ func (s *Service) Start() error {
 	if s.done != nil {
 		select {
 		case <-s.done:
-			s.cancel, s.queue, s.done = nil, nil, nil
+			s.ctx, s.cancel, s.queue, s.done = nil, nil, nil, nil
 		default:
 			return errors.New("speed-test service is already running")
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	queue := make(chan string, 128)
+	queue := make(chan queuedJob, 128)
 	done := make(chan struct{})
-	s.cancel, s.queue, s.done = cancel, queue, done
+	s.ctx, s.cancel, s.queue, s.done = ctx, cancel, queue, done
 	s.state.Started()
 
 	go func() {
@@ -43,33 +43,53 @@ func (s *Service) Start() error {
 			case <-ctx.Done():
 				s.failPending(queue, ctx.Err())
 				return
-			case ip := <-queue:
-				s.run(ctx, ip)
+			case job := <-queue:
+				s.run(job)
 			}
 		}
 	}()
 	return nil
 }
 
-func (s *Service) run(ctx context.Context, ip string) {
-	speed, err := s.tester.TestNode(ctx, ip)
+func (s *Service) run(job queuedJob) {
+	s.jobsMu.RLock()
+	record, exists := s.jobs[job.ip]
+	shouldRun := exists && record.id == job.id && record.result.State == "running"
+	s.jobsMu.RUnlock()
+	if !shouldRun {
+		return
+	}
+
+	speed, err := s.tester.TestNode(job.ctx, job.ip)
 	result := Result{State: "complete", BitsPerSecond: speed}
-	if err != nil {
+	if errors.Is(job.ctx.Err(), context.Canceled) {
+		result = Result{State: "canceled"}
+	} else if err != nil {
 		result.State = "failed"
 		result.Error = err.Error()
-		s.logger.Printf("[service:%s] node=%s error=%v", ID, ip, err)
+		s.logger.Printf("[service:%s] node=%s error=%v", ID, job.ip, err)
 	}
 	s.jobsMu.Lock()
-	s.jobs[ip] = result
+	record, exists = s.jobs[job.ip]
+	if exists && record.id == job.id && record.result.State == "running" {
+		record.result = result
+		record.cancel = nil
+		s.jobs[job.ip] = record
+	}
 	s.jobsMu.Unlock()
 }
 
-func (s *Service) failPending(queue <-chan string, cause error) {
+func (s *Service) failPending(queue <-chan queuedJob, cause error) {
 	for {
 		select {
-		case ip := <-queue:
+		case job := <-queue:
 			s.jobsMu.Lock()
-			s.jobs[ip] = Result{State: "failed", Error: cause.Error()}
+			record, exists := s.jobs[job.ip]
+			if exists && record.id == job.id && record.result.State == "running" {
+				record.result = Result{State: "failed", Error: cause.Error()}
+				record.cancel = nil
+				s.jobs[job.ip] = record
+			}
 			s.jobsMu.Unlock()
 		default:
 			return
@@ -80,9 +100,11 @@ func (s *Service) failPending(queue <-chan string, cause error) {
 func (s *Service) failRunning(cause error) {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
-	for ip, result := range s.jobs {
-		if result.State == "running" {
-			s.jobs[ip] = Result{State: "failed", Error: cause.Error()}
+	for ip, record := range s.jobs {
+		if record.result.State == "running" {
+			record.result = Result{State: "failed", Error: cause.Error()}
+			record.cancel = nil
+			s.jobs[ip] = record
 		}
 	}
 }

@@ -52,6 +52,7 @@ func (s *Server) Setup() {
 	api.Post("/nodes/reconnect", s.reconnectNode)
 	api.Post("/connection/direct", s.setDirectMode)
 	api.Post("/nodes/:ip/speed-test", s.startSpeedTest)
+	api.Delete("/nodes/:ip/speed-test", s.cancelSpeedTest)
 	api.Get("/nodes/:ip/speed-test", s.speedTestStatus)
 	api.Get("/config", s.getConfig)
 	api.Put("/config", s.putConfig)

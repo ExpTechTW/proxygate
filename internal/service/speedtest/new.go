@@ -11,6 +11,6 @@ func New(tester Tester, logger *log.Logger) *Service {
 		state:  service.NewState(ID),
 		tester: tester,
 		logger: logger,
-		jobs:   make(map[string]Result),
+		jobs:   make(map[string]jobRecord),
 	}
 }

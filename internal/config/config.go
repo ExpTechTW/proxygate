@@ -288,7 +288,7 @@ func requireCurrentConfigFields(data []byte) error {
 		return err
 	}
 	if err := requireJSONFields(fields, "config",
-		"sourceUrl", "refreshInterval", "filterExpression", "selectionMode", "followRankingOnRefresh", "fallbackToDirect",
+		"sourceUrl", "refreshInterval", "filterExpression", "selectionMode", "followRankingOnRefresh",
 		"socks5", "monitor", "web", "databasePath", "dnsServers", "speedTestUrl", "speedTestTimeout",
 		"protocolPriority", "connectTimeout", "vpnGateUsername", "vpnGatePassword", "vpnGatePreSharedKey"); err != nil {
 		return err

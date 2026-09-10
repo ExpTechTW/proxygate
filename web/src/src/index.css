@@ -103,6 +103,8 @@ svg { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; s
 .danger-button:hover:not(:disabled) { border-color: var(--danger); }
 .icon-button { border: 1px solid transparent; background: transparent; color: var(--muted); }
 .icon-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.icon-button.cancel-button { border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: var(--danger-soft); color: var(--danger); }
+.icon-button.cancel-button:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 .spinner { display: inline-block; width: 14px; height: 14px; flex: none; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -123,6 +125,13 @@ svg { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; s
 .status-card.pending .status-card-head i { background: var(--warning); }
 .status-card.unhealthy .status-card-head i { background: var(--danger); }
 .status-card > strong { display: block; margin-top: 1.2rem; overflow: hidden; color: var(--text); font-size: 1.4rem; font-weight: 700; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+.status-state-row { display: flex; min-width: 0; margin-top: 1.2rem; align-items: center; justify-content: space-between; gap: .6rem; }
+.status-state-row > strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 1.4rem; font-weight: 700; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+.status-state-row button { display: inline-flex; min-height: 24px; padding: .25rem .45rem; border: 1px solid var(--border-strong); border-radius: 5px; align-items: center; justify-content: center; gap: .3rem; background: transparent; color: var(--muted); font-size: .5rem; font-weight: 700; white-space: nowrap; }
+.status-state-row button:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.status-state-row button.resume { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-soft); color: var(--accent); }
+.status-state-row button.resume:hover:not(:disabled) { border-color: var(--accent); }
+.status-state-row .spinner { width: 10px; height: 10px; }
 .status-card > strong.compact { font-size: 1.02rem; }
 .status-card p { margin: .38rem 0 0; overflow: hidden; color: var(--muted); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
@@ -259,7 +268,7 @@ svg { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; s
 
 @media (max-width: 390px) {
   .topbar .brand strong { font-size: .9rem; }.topbar-actions .locale-select { max-width: 82px; }.topbar .quiet-button:last-child { padding-inline: .4rem; }
-  .heading-actions .primary-button, .heading-actions .secondary-button, .heading-actions .danger-button { width: 100%; }.sync-label { width: 100%; }
+  .heading-actions .primary-button, .heading-actions .secondary-button { width: 100%; }.sync-label { width: 100%; }
   .sort-control select { max-width: 52vw; }
   .node-actions .secondary-button, .node-actions .icon-button { width: 100%; flex: 1 1 100%; }
 }

@@ -102,7 +102,10 @@
     "reconnectProtocol": "Reconnect with this protocol",
     "switch": "Switch to this node",
     "speedTestTitle": "Run an isolated VPN speed test",
+    "cancelSpeedTestTitle": "Cancel the current VPN speed test",
     "testing": "Testing",
+    "cancelTest": "Cancel test",
+    "cancelingTest": "Canceling",
     "speedTest": "Speed test",
     "speedTestFailed": "Speed test failed"
   },
