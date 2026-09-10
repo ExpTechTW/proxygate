@@ -15,6 +15,7 @@ ProxyGate turns public VPN Gate nodes into a managed SOCKS5 proxy. It downloads 
 - SOCKS5 CONNECT and UDP ASSOCIATE support for TCP/UDP clients such as tun2socks
 - Optional SOCKS5 authentication with username and password
 - Automatic ranking, health checks, and failover
+- Optional direct fallback while a failed VPN connection is replaced
 - Manual node and protocol selection
 - On-demand speed testing with configurable URL and timeout
 - In-process service and application restart support
@@ -70,6 +71,7 @@ Useful networking settings include:
 - `speedTestUrl`: download URL used for manual speed tests
 - `speedTestTimeout`: maximum speed-test duration; partial downloads still produce an average speed
 - `monitor.url`: health-check endpoint
+- `fallbackToDirect`: route SOCKS5 traffic through the local network while reconnecting after a VPN failure
 
 Configuration and database schemas do not include compatibility logic for older versions. When a schema changes, use a current configuration and a fresh database.
 

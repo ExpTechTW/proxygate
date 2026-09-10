@@ -37,14 +37,16 @@ type Node struct {
 }
 
 type RuntimeStatus struct {
-	State           string    `json:"state"`
-	ConnectingIP    string    `json:"connectingIp,omitempty"`
-	Selection       string    `json:"selection"`
-	ActiveIP        string    `json:"activeIp,omitempty"`
-	ActiveHostName  string    `json:"activeHostName,omitempty"`
-	ActiveProtocol  string    `json:"activeProtocol,omitempty"`
-	LastRefresh     time.Time `json:"lastRefresh,omitzero"`
-	LastHealthCheck time.Time `json:"lastHealthCheck,omitzero"`
-	LastError       string    `json:"lastError,omitempty"`
-	RefreshRunning  bool      `json:"refreshRunning"`
+	State            string    `json:"state"`
+	ConnectingIP     string    `json:"connectingIp,omitempty"`
+	Selection        string    `json:"selection"`
+	ActiveIP         string    `json:"activeIp,omitempty"`
+	ActiveHostName   string    `json:"activeHostName,omitempty"`
+	ActiveProtocol   string    `json:"activeProtocol,omitempty"`
+	LastRefresh      time.Time `json:"lastRefresh,omitzero"`
+	LastHealthCheck  time.Time `json:"lastHealthCheck,omitzero"`
+	LastError        string    `json:"lastError,omitempty"`
+	RefreshRunning   bool      `json:"refreshRunning"`
+	DirectMode       bool      `json:"directMode"`
+	ConnectionPaused bool      `json:"connectionPaused"`
 }

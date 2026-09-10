@@ -25,27 +25,30 @@ type Manager struct {
 	logger  *log.Logger
 	drivers map[string]Driver
 
-	asyncMu        sync.Mutex
-	async          sync.WaitGroup
-	closing        bool
-	switchMu       sync.Mutex
-	autoMu         sync.Mutex
-	failoverMu     sync.Mutex
-	mu             sync.RWMutex
-	session        Session
-	node           model.Node
-	protocol       string
-	selection      string
-	manualIP       string
-	manualProtocol string
-	state          string
-	lastErr        error
+	asyncMu          sync.Mutex
+	async            sync.WaitGroup
+	closing          bool
+	switchMu         sync.Mutex
+	autoMu           sync.Mutex
+	failoverMu       sync.Mutex
+	mu               sync.RWMutex
+	session          Session
+	node             model.Node
+	protocol         string
+	selection        string
+	manualIP         string
+	manualProtocol   string
+	state            string
+	lastErr          error
+	directMode       bool
+	connectionPaused bool
 
-	connectingIP   string
-	cancelConnect  context.CancelFunc
-	connectAttempt uint64
-	generation     uint64
-	lastHealth     time.Time
+	connectingIP    string
+	cancelConnect   context.CancelFunc
+	cancelAutomatic context.CancelFunc
+	connectAttempt  uint64
+	generation      uint64
+	lastHealth      time.Time
 }
 
 func NewManager(ctx context.Context, configStore *config.Store, database *store.Store, logger *log.Logger, drivers []Driver) *Manager {
@@ -85,7 +88,11 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	m.mu.RLock()
 	session := m.session
+	directMode := m.directMode
 	m.mu.RUnlock()
+	if directMode {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
 	if session == nil {
 		return nil, errors.New("no VPN session is active")
 	}
@@ -98,7 +105,11 @@ func (m *Manager) DialContext(ctx context.Context, network, address string) (net
 func (m *Manager) ListenPacket(network, address string) (net.PacketConn, error) {
 	m.mu.RLock()
 	session := m.session
+	directMode := m.directMode
 	m.mu.RUnlock()
+	if directMode {
+		return net.ListenPacket(network, address)
+	}
 	if session == nil {
 		return nil, errors.New("no VPN session is active")
 	}
@@ -112,7 +123,11 @@ func (m *Manager) ListenPacket(network, address string) (net.PacketConn, error) 
 func (m *Manager) ResolveIPv4(ctx context.Context, host string) ([]net.IP, error) {
 	m.mu.RLock()
 	session := m.session
+	directMode := m.directMode
 	m.mu.RUnlock()
+	if directMode {
+		return net.DefaultResolver.LookupIP(ctx, "ip4", host)
+	}
 	if session == nil {
 		return nil, errors.New("no VPN session is active")
 	}
@@ -126,6 +141,20 @@ func (m *Manager) ActiveIP() string {
 		return ""
 	}
 	return m.node.IP
+}
+
+// PreservedIP keeps a manually selected node available while VPN connections
+// are paused, so resuming can restore the same selection after a refresh.
+func (m *Manager) PreservedIP() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.session != nil {
+		return m.node.IP
+	}
+	if m.connectionPaused && m.selection == "manual" {
+		return m.manualIP
+	}
+	return ""
 }
 
 func dialSessionIPv4(ctx context.Context, session Session, address string, dnsServers []string) (net.Conn, error) {
@@ -157,6 +186,72 @@ func (m *Manager) SelectManual(ctx context.Context, ip, protocol string) error {
 	return m.startCandidate(node, "manual", strings.TrimSpace(protocol))
 }
 
+// SetDirectMode pauses or resumes managed VPN connections. Direct routing
+// remains active while a resumed connection is being established.
+func (m *Manager) SetDirectMode(ctx context.Context, enabled bool) error {
+	if enabled {
+		m.mu.Lock()
+		if m.connectionPaused {
+			m.mu.Unlock()
+			return nil
+		}
+		old := m.session
+		m.session = nil
+		m.directMode = true
+		m.connectionPaused = true
+		m.state, m.lastErr = "direct", nil
+		m.generation++
+		if m.cancelConnect != nil {
+			m.cancelConnect()
+			m.cancelConnect = nil
+		}
+		if m.cancelAutomatic != nil {
+			m.cancelAutomatic()
+			m.cancelAutomatic = nil
+		}
+		m.connectAttempt++
+		m.connectingIP = ""
+		m.mu.Unlock()
+		if old != nil {
+			if err := old.Close(); err != nil {
+				m.logger.Printf("[vpn] close session for direct mode: %v", err)
+			}
+		}
+		m.logger.Printf("[vpn] direct mode enabled; managed connections paused")
+		return nil
+	}
+
+	m.mu.Lock()
+	if !m.connectionPaused {
+		m.mu.Unlock()
+		return nil
+	}
+	m.connectionPaused = false
+	selection, manualIP, manualProtocol := m.selection, m.manualIP, m.manualProtocol
+	m.state, m.lastErr = "connecting", nil
+	m.mu.Unlock()
+	m.logger.Printf("[vpn] direct mode resume requested; selection=%s", selection)
+
+	if selection == "manual" && manualIP != "" {
+		if node, err := m.store.Node(ctx, manualIP); err == nil {
+			return m.startCandidate(node, "manual", manualProtocol)
+		}
+		m.setAutomatic(ctx)
+	}
+	return m.startAutomatic()
+}
+
+func (m *Manager) startAutomatic() error {
+	if !m.runAsync(func() {
+		if err := m.SwitchAutomatic(m.ctx); err != nil && m.ctx.Err() == nil {
+			m.logger.Printf("[vpn] automatic connection: %v", err)
+		}
+	}) {
+		return errors.New("VPN manager is shutting down")
+	}
+	return nil
+}
+
 func (m *Manager) ReconnectCurrent(ctx context.Context) error {
 	m.mu.RLock()
 	hasSession := m.session != nil
@@ -177,6 +272,11 @@ func (m *Manager) startCandidate(node model.Node, selection, forcedProtocol stri
 		return err
 	}
 	m.mu.Lock()
+	m.connectionPaused = false
+	if m.cancelAutomatic != nil {
+		m.cancelAutomatic()
+		m.cancelAutomatic = nil
+	}
 	if m.cancelConnect != nil {
 		m.cancelConnect()
 	}
@@ -230,8 +330,23 @@ func (m *Manager) SwitchAutomatic(ctx context.Context) error {
 }
 
 func (m *Manager) switchAutomatic(ctx context.Context) error {
+	switchCtx, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
+	if m.connectionPaused {
+		m.mu.Unlock()
+		cancel()
+		return nil
+	}
+	m.cancelAutomatic = cancel
+	m.mu.Unlock()
+	defer func() {
+		cancel()
+		m.mu.Lock()
+		m.cancelAutomatic = nil
+		m.mu.Unlock()
+	}()
 	settings := m.config.Get()
-	nodes, err := m.store.Nodes(ctx, settings.SelectionMode, 10, 0)
+	nodes, err := m.store.Nodes(switchCtx, settings.SelectionMode, 10, 0)
 	if err != nil {
 		return err
 	}
@@ -240,14 +355,17 @@ func (m *Manager) switchAutomatic(ctx context.Context) error {
 	}
 	var failures []error
 	for _, node := range nodes {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if switchCtx.Err() != nil {
+			return switchCtx.Err()
 		}
-		if activateErr := m.activate(ctx, node, "auto", false, 0, ""); activateErr == nil {
+		if activateErr := m.activate(switchCtx, node, "auto", false, 0, ""); activateErr == nil {
 			return nil
 		} else {
+			if switchCtx.Err() != nil {
+				return switchCtx.Err()
+			}
 			failures = append(failures, fmt.Errorf("%s: %w", node.IP, activateErr))
-			_ = m.store.MarkFailure(ctx, node.IP, activateErr.Error())
+			_ = m.store.MarkFailure(switchCtx, node.IP, activateErr.Error())
 		}
 	}
 	err = fmt.Errorf("%s", strings.Join(func() []string {
@@ -269,7 +387,7 @@ func (m *Manager) activate(ctx context.Context, node model.Node, selection strin
 	}
 	session, protocol, err := m.connectNode(ctx, node, requireHealth, forcedProtocol)
 	if err != nil {
-		if !requireHealth {
+		if !requireHealth && ctx.Err() == nil {
 			m.setState("error", err)
 		}
 		return err
@@ -414,13 +532,14 @@ func (m *Manager) TestNode(ctx context.Context, ip string) (speed int64, resultE
 
 func (m *Manager) install(session Session, node model.Node, protocol, selection string, expectedAttempt uint64, forcedProtocol string) bool {
 	m.mu.Lock()
-	if expectedAttempt != 0 && m.connectAttempt != expectedAttempt {
+	if m.connectionPaused || expectedAttempt != 0 && m.connectAttempt != expectedAttempt {
 		m.mu.Unlock()
 		return false
 	}
 	old := m.session
 	oldIP := m.node.IP
 	m.session, m.node, m.protocol, m.selection = session, node, protocol, selection
+	m.directMode = false
 	if selection == "manual" {
 		m.manualIP = node.IP
 		m.manualProtocol = forcedProtocol
@@ -454,7 +573,7 @@ func (m *Manager) install(session Session, node model.Node, protocol, selection 
 			} else {
 				err = fmt.Errorf("VPN session ended: %w", err)
 			}
-			m.Failover(m.ctx, err)
+			m.FailoverSession(m.ctx, session, err)
 		}
 	})
 	return true
@@ -498,15 +617,33 @@ func (m *Manager) failover(ctx context.Context, expected Session, cause error) {
 	defer m.failoverMu.Unlock()
 	m.autoMu.Lock()
 	defer m.autoMu.Unlock()
+	settings := m.config.Get()
 	m.mu.Lock()
 	if expected != nil && m.session != expected {
 		m.mu.Unlock()
 		return
 	}
+	if m.connectionPaused {
+		m.mu.Unlock()
+		return
+	}
 	failedIP := m.node.IP
+	var failedSession Session
+	if settings.FallbackToDirect {
+		failedSession = m.session
+		m.session = nil
+		m.directMode = true
+		m.state = "connecting"
+		m.generation++
+	}
 	m.selection, m.manualIP, m.manualProtocol = "auto", "", ""
 	m.lastErr = cause
 	m.mu.Unlock()
+	if failedSession != nil {
+		if err := failedSession.Close(); err != nil {
+			m.logger.Printf("[vpn] close failed session for direct fallback: %v", err)
+		}
+	}
 	if failedIP != "" {
 		_ = m.store.MarkFailure(ctx, failedIP, cause.Error())
 	}
@@ -523,7 +660,11 @@ func (m *Manager) AfterRefresh(ctx context.Context) {
 	m.mu.RLock()
 	selection, activeIP := m.selection, m.node.IP
 	hasSession := m.session != nil
+	paused := m.connectionPaused
 	m.mu.RUnlock()
+	if paused {
+		return
+	}
 	if !hasSession {
 		m.runAsync(func() {
 			if err := m.SwitchAutomatic(m.ctx); err != nil {
@@ -560,7 +701,12 @@ func (m *Manager) Session() Session {
 func (m *Manager) Status(refreshRunning bool, lastRefresh time.Time, refreshErr error) model.RuntimeStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	status := model.RuntimeStatus{State: m.state, Selection: m.selection, ActiveIP: m.node.IP, ActiveHostName: m.node.HostName, ActiveProtocol: m.protocol, ConnectingIP: m.connectingIP, LastRefresh: lastRefresh, LastHealthCheck: m.lastHealth, RefreshRunning: refreshRunning}
+	status := model.RuntimeStatus{State: m.state, Selection: m.selection, ConnectingIP: m.connectingIP, LastRefresh: lastRefresh, LastHealthCheck: m.lastHealth, RefreshRunning: refreshRunning, DirectMode: m.directMode, ConnectionPaused: m.connectionPaused}
+	if m.session != nil {
+		status.ActiveIP = m.node.IP
+		status.ActiveHostName = m.node.HostName
+		status.ActiveProtocol = m.protocol
+	}
 	if m.lastErr != nil {
 		status.LastError = m.lastErr.Error()
 	} else if refreshErr != nil {
@@ -587,6 +733,10 @@ func (m *Manager) Close() error {
 	if m.cancelConnect != nil {
 		m.cancelConnect()
 		m.cancelConnect = nil
+	}
+	if m.cancelAutomatic != nil {
+		m.cancelAutomatic()
+		m.cancelAutomatic = nil
 	}
 	m.connectAttempt++
 	m.connectingIP = ""

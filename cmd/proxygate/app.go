@@ -51,7 +51,7 @@ func appStart(args arguments, logger *log.Logger) error {
 
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	manager := vpn.NewManager(appCtx, configStore, database, logger, vpn.DefaultDrivers())
-	refresher := vpngate.NewRefresher(configStore, database, logger, manager.ActiveIP, manager.AfterRefresh)
+	refresher := vpngate.NewRefresher(configStore, database, logger, manager.PreservedIP, manager.AfterRefresh)
 	socksService := service_socks5.New(configStore, manager, logger)
 	speedTestService := service_speedtest.New(manager, logger)
 	healthCheckService := service_healthcheck.New(configStore, manager, logger)

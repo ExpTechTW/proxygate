@@ -37,6 +37,7 @@ type Config struct {
 	FilterExpression       string   `json:"filterExpression"`
 	SelectionMode          string   `json:"selectionMode"`
 	FollowRankingOnRefresh bool     `json:"followRankingOnRefresh"`
+	FallbackToDirect       bool     `json:"fallbackToDirect"`
 	SOCKS5                 SOCKS5   `json:"socks5"`
 	Monitor                Monitor  `json:"monitor"`
 	Web                    Web      `json:"web"`
@@ -83,7 +84,7 @@ func defaultConfig() (Config, string) {
 	}
 	return Config{
 		SourceURL: DefaultSourceURL, RefreshInterval: "30m", FilterExpression: "true",
-		SelectionMode: "speed", FollowRankingOnRefresh: true,
+		SelectionMode: "speed", FollowRankingOnRefresh: true, FallbackToDirect: false,
 		SOCKS5:       SOCKS5{ListenAddress: "127.0.0.1:1080"},
 		Monitor:      Monitor{URL: "https://www.google.com/generate_204", Interval: "30s", Timeout: "10s"},
 		Web:          Web{ListenAddress: "127.0.0.1:8080", Username: "admin", PasswordHash: string(hash), SessionSecret: randomSecret()},
@@ -287,7 +288,7 @@ func requireCurrentConfigFields(data []byte) error {
 		return err
 	}
 	if err := requireJSONFields(fields, "config",
-		"sourceUrl", "refreshInterval", "filterExpression", "selectionMode", "followRankingOnRefresh",
+		"sourceUrl", "refreshInterval", "filterExpression", "selectionMode", "followRankingOnRefresh", "fallbackToDirect",
 		"socks5", "monitor", "web", "databasePath", "dnsServers", "speedTestUrl", "speedTestTimeout",
 		"protocolPriority", "connectTimeout", "vpnGateUsername", "vpnGatePassword", "vpnGatePreSharedKey"); err != nil {
 		return err

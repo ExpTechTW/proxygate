@@ -50,6 +50,7 @@ func (s *Server) Setup() {
 	api.Get("/nodes", s.nodes)
 	api.Post("/nodes/select", s.selectNode)
 	api.Post("/nodes/reconnect", s.reconnectNode)
+	api.Post("/connection/direct", s.setDirectMode)
 	api.Post("/nodes/:ip/speed-test", s.startSpeedTest)
 	api.Get("/nodes/:ip/speed-test", s.speedTestStatus)
 	api.Get("/config", s.getConfig)

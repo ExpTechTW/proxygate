@@ -96,6 +96,19 @@ func (s *Server) reconnectNode(c fiber.Ctx) error {
 	return writeJSON(c, fiber.StatusAccepted, map[string]bool{"ok": true})
 }
 
+func (s *Server) setDirectMode(c fiber.Ctx) error {
+	var input struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJSON(c, &input) {
+		return nil
+	}
+	if err := s.manager.SetDirectMode(c.Context(), input.Enabled); err != nil {
+		return writeError(c, fiber.StatusBadGateway, err.Error())
+	}
+	return writeJSON(c, fiber.StatusAccepted, map[string]bool{"ok": true})
+}
+
 func (s *Server) startSpeedTest(c fiber.Ctx) error {
 	result, err := s.speedTests.QueueManual(strings.Clone(c.Params("ip")))
 	if err != nil {

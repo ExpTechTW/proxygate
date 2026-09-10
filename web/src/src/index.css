@@ -259,7 +259,7 @@ svg { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; s
 
 @media (max-width: 390px) {
   .topbar .brand strong { font-size: .9rem; }.topbar-actions .locale-select { max-width: 82px; }.topbar .quiet-button:last-child { padding-inline: .4rem; }
-  .heading-actions .primary-button, .heading-actions .secondary-button { width: 100%; }.sync-label { width: 100%; }
+  .heading-actions .primary-button, .heading-actions .secondary-button, .heading-actions .danger-button { width: 100%; }.sync-label { width: 100%; }
   .sort-control select { max-width: 52vw; }
   .node-actions .secondary-button, .node-actions .icon-button { width: 100%; flex: 1 1 100%; }
 }

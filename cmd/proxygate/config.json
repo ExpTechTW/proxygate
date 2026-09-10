@@ -10,6 +10,7 @@
   "filterExpression": "node.countryShort === \"JP\" \u0026\u0026 !node.hostName.includes(\"public-vpn\")",
   "selectionMode": "speed",
   "followRankingOnRefresh": false,
+  "fallbackToDirect": false,
   "socks5": {
     "listenAddress": "127.0.0.1:1081",
     "username": "",

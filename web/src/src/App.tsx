@@ -140,6 +140,7 @@ function Nodes() {
   const [page, setPage] = useState(1)
   const [loadingNodes, setLoadingNodes] = useState(true)
   const [reconnecting, setReconnecting] = useState(false)
+  const [switchingDirect, setSwitchingDirect] = useState(false)
   const [lastSynced, setLastSynced] = useState<Date>()
   const statusRequest = useRef(false)
   const nodesRequest = useRef(false)
@@ -254,7 +255,8 @@ function Nodes() {
   const pageCount = Math.max(1, Math.ceil(filteredNodes.length / pageSize))
   const currentPage = Math.min(page, pageCount)
   const visibleNodes = filteredNodes.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const connected = status?.state === 'connected'
+  const connected = status?.state === 'connected' && !status?.directMode
+  const directMode = Boolean(status?.directMode)
 
   const refresh = async () => {
     try {
@@ -279,12 +281,31 @@ function Nodes() {
     }
   }
 
+  const toggleDirect = async () => {
+    if (!status) return
+    setError(''); setSwitchingDirect(true)
+    const enabled = !status.connectionPaused
+    try {
+      await api.post('/api/connection/direct', { enabled })
+      setStatus(current => current ? enabled
+        ? { ...current, state: 'direct', directMode: true, connectionPaused: true, activeIp: undefined, activeHostName: undefined, activeProtocol: undefined, connectingIp: undefined }
+        : { ...current, state: 'connecting', connectionPaused: false }
+        : current)
+      await loadStatus()
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setSwitchingDirect(false)
+    }
+  }
+
   return <div className="page-stack">
     <header className="page-heading">
       <div><p className="eyebrow">{t('nodes.eyebrow')}</p><h1>{t('nodes.heading')}</h1><p>{t('nodes.description')}</p></div>
       <div className="heading-actions">
         <span className="sync-label">{t('nodes.synced', { time: formatRelativeTime(lastSynced, t) })}</span>
-        <button className="secondary-button" disabled={!status?.activeIp || status.state === 'connecting' || reconnecting} onClick={reconnect}>{reconnecting ? <Spinner /> : <RestartIcon />}{reconnecting ? t('nodes.reconnecting') : t('nodes.reconnectCurrent')}</button>
+        <button className={status?.connectionPaused ? 'primary-button' : 'danger-button'} disabled={!status || switchingDirect} onClick={toggleDirect}>{switchingDirect ? <Spinner /> : status?.connectionPaused ? <RestartIcon /> : null}{switchingDirect ? t('nodes.switchingConnection') : status?.connectionPaused ? t('nodes.resumeConnection') : directMode ? t('nodes.pauseReconnect') : t('nodes.enableDirect')}</button>
+        <button className="secondary-button" disabled={!status?.activeIp || status.state === 'connecting' || reconnecting || switchingDirect} onClick={reconnect}>{reconnecting ? <Spinner /> : <RestartIcon />}{reconnecting ? t('nodes.reconnecting') : t('nodes.reconnectCurrent')}</button>
         <button className="primary-button" disabled={status?.refreshRunning} onClick={refresh}>{status?.refreshRunning ? <Spinner /> : <RefreshIcon />}{status?.refreshRunning ? t('nodes.refreshing') : t('nodes.refreshSource')}</button>
       </div>
     </header>
@@ -293,12 +314,12 @@ function Nodes() {
     {status?.lastError && <Notice tone="warning"><strong>{t('nodes.lastError')}</strong><span>{status.lastError}</span></Notice>}
 
     <section className="status-grid">
-      <article className={`status-card connection ${connected ? 'healthy' : status?.state === 'connecting' ? 'pending' : 'unhealthy'}`}>
+      <article className={`status-card connection ${connected ? 'healthy' : directMode || status?.state === 'connecting' ? 'pending' : 'unhealthy'}`}>
         <div className="status-card-head"><span>{t('status.connection')}</span><i /></div>
-        <strong>{stateLabel(status?.state, t)}</strong>
-        <p>{status?.selection === 'manual' ? t('status.manual') : t('status.automatic')}</p>
+        <strong>{directMode ? t('status.direct') : stateLabel(status?.state, t)}</strong>
+        <p>{directMode ? status?.connectionPaused ? t('status.directPaused') : t('status.directFallback') : status?.selection === 'manual' ? t('status.manual') : t('status.automatic')}</p>
       </article>
-      <article className="status-card"><div className="status-card-head"><span>{t('status.currentExit')}</span><small>{status?.activeProtocol ? protocolLabels[status.activeProtocol] : '—'}</small></div><strong className="mono compact">{status?.activeIp || t('status.notConnected')}</strong><p>{status?.activeHostName || t('status.waiting')}</p></article>
+      <article className="status-card"><div className="status-card-head"><span>{t('status.currentExit')}</span><small>{status?.activeProtocol ? protocolLabels[status.activeProtocol] : '—'}</small></div><strong className="mono compact">{directMode ? t('status.localNetwork') : status?.activeIp || t('status.notConnected')}</strong><p>{directMode ? t('status.localNetworkHint') : status?.activeHostName || t('status.waiting')}</p></article>
       <article className="status-card"><div className="status-card-head"><span>{t('status.healthCheck')}</span><small>{status?.lastError ? t('status.unhealthy') : t('status.healthy')}</small></div><strong className="compact">{formatRelativeTime(status?.lastHealthCheck, t)}</strong><p>{status?.lastHealthCheck ? formatDateTime(status.lastHealthCheck, locale) : t('status.notChecked')}</p></article>
       <article className="status-card"><div className="status-card-head"><span>{t('status.nodeCount')}</span><small>{t('status.filtered')}</small></div><strong>{nodes.length}</strong><p>{t('status.showing', { count: filteredNodes.length })}</p></article>
     </section>
@@ -472,6 +493,7 @@ function Settings() {
       <Field label={t('settings.connectTimeout')} hint={t('settings.connectTimeoutHint')}><input value={settings.connectTimeout} onChange={event => update('connectTimeout', event.target.value)} /></Field>
       <Field label={t('settings.automaticSort')}><select value={settings.selectionMode} onChange={event => update('selectionMode', event.target.value as Config['selectionMode'])}><option value="speed">{t('settings.sortSpeed')}</option><option value="ping">{t('settings.sortPing')}</option><option value="score">{t('settings.sortScore')}</option></select></Field>
       <label className="toggle-field"><input type="checkbox" checked={settings.followRankingOnRefresh} onChange={event => update('followRankingOnRefresh', event.target.checked)} /><span><strong>{t('settings.followRanking')}</strong><small>{t('settings.followRankingHint')}</small></span></label>
+      <label className="toggle-field"><input type="checkbox" checked={settings.fallbackToDirect} onChange={event => update('fallbackToDirect', event.target.checked)} /><span><strong>{t('settings.fallbackToDirect')}</strong><small>{t('settings.fallbackToDirectHint')}</small></span></label>
       <Field label={t('settings.filter')} hint={t('settings.filterHint')} wide><textarea rows={6} spellCheck={false} value={settings.filterExpression} onChange={event => update('filterExpression', event.target.value)} /></Field>
       <FilterHelp />
     </SettingsSection>
