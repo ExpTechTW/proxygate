@@ -532,6 +532,8 @@ function Settings() {
       <Field label={t('settings.listenAddress')}><input value={settings.socks5.listenAddress} onChange={event => update('socks5', { ...settings.socks5, listenAddress: event.target.value })} /></Field>
       <Field label={t('settings.username')} hint={t('settings.noAuthHint')}><input value={settings.socks5.username} onChange={event => update('socks5', { ...settings.socks5, username: event.target.value })} /></Field>
       <Field label={t('settings.password')}><input type="password" value={settings.socks5.password} onChange={event => update('socks5', { ...settings.socks5, password: event.target.value })} /></Field>
+      <Field label={t('settings.socksIdleTimeout')} hint={t('settings.socksIdleTimeoutHint')}><input placeholder="5m" value={settings.socks5.idleTimeout} onChange={event => update('socks5', { ...settings.socks5, idleTimeout: event.target.value })} /></Field>
+      <Field label={t('settings.socksHalfCloseTimeout')} hint={t('settings.socksHalfCloseTimeoutHint')}><input placeholder="1m" value={settings.socks5.halfCloseTimeout} onChange={event => update('socks5', { ...settings.socks5, halfCloseTimeout: event.target.value })} /></Field>
     </SettingsSection>
 
     <SettingsSection index="04" title={t('settings.probeTitle')} description={t('settings.probeDescription')}>

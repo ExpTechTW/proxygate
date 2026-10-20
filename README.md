@@ -72,6 +72,12 @@ Useful networking settings include:
 - `speedTestTimeout`: maximum speed-test duration; partial downloads still produce an average speed
 - `monitor.url`: health-check endpoint
 - `fallbackToDirect`: route SOCKS5 traffic through the local network while reconnecting after a VPN failure
+- `socks5.idleTimeout`: close TCP and UDP associations after this period without traffic (default `5m`)
+- `socks5.halfCloseTimeout`: close a half-closed TCP relay after this period without further traffic (default `1m`)
+
+SOCKS5 timeouts apply to new connections. Increase them for applications that keep long-lived idle connections or pause longer while finishing a response after closing their upload stream. VPN DNS answers are cached per session according to their TTL, with at most 256 entries; each configured DNS server gets up to two seconds before trying the next one.
+
+For local development against the adjacent `../govpn` checkout, use a `go.work` workspace containing both modules. Workspace files are ignored by Git; release and Docker builds continue using the govpn version in `go.mod` until a release containing the library fix is published and the dependency is updated.
 
 Configuration and database schemas do not include compatibility logic for older versions. When a schema changes, use a current configuration and a fresh database.
 

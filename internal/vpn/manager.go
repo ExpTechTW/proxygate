@@ -444,6 +444,7 @@ func (m *Manager) connectNode(ctx context.Context, node model.Node, requireHealt
 			failures = append(failures, fmt.Errorf("%s: %w", protocol, err))
 			continue
 		}
+		session = newDNSSession(session)
 		if requireHealth {
 			if err := probeSessionHealth(ctx, session, settings); err != nil {
 				_ = session.Close()

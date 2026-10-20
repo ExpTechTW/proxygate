@@ -53,7 +53,7 @@ export interface Config {
   selectionMode: 'speed' | 'ping' | 'score'
   followRankingOnRefresh: boolean
   fallbackToDirect: boolean
-  socks5: { listenAddress: string; username: string; password: string }
+  socks5: { listenAddress: string; username: string; password: string; idleTimeout: string; halfCloseTimeout: string }
   monitor: { url: string; interval: string; timeout: string }
   web: { listenAddress: string; username: string; passwordHash: string; sessionSecret: string }
   databasePath: string

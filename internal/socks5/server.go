@@ -134,10 +134,10 @@ func (s *Server) handle(ctx context.Context, client net.Conn) error {
 }
 
 func (s *Server) handleConnect(ctx context.Context, client net.Conn, network, address string) error {
-	_ = client.SetDeadline(time.Time{})
+	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 	dialContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	upstream, err := s.dialer.DialContext(dialContext, network, address)
+	cancel()
 	if err != nil {
 		_ = writeReply(client, replyGeneral, nil)
 		return fmt.Errorf("connect to %s: %w", address, err)
@@ -146,22 +146,23 @@ func (s *Server) handleConnect(ctx context.Context, client net.Conn, network, ad
 	if err := writeReply(client, replyOK, upstream.LocalAddr()); err != nil {
 		return err
 	}
-	var wait sync.WaitGroup
-	wait.Add(2)
-	copyStream := func(destination, source net.Conn) {
-		defer wait.Done()
-		_, _ = io.Copy(destination, source)
-		if closer, ok := destination.(interface{ CloseWrite() error }); ok {
-			_ = closer.CloseWrite()
-		}
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		return err
 	}
-	go copyStream(upstream, client)
-	go copyStream(client, upstream)
-	wait.Wait()
-	return nil
+	settings := s.config.Get().SOCKS5
+	idleTimeout, _ := settings.IdleTimeoutDuration()
+	halfCloseTimeout, _ := settings.HalfCloseTimeoutDuration()
+	return relayTCP(ctx, client, upstream, idleTimeout, halfCloseTimeout)
+}
+
+type udpUpstream struct {
+	net.PacketConn
+	writeMu sync.Mutex
 }
 
 func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	packetDialer, ok := s.dialer.(PacketDialer)
 	if !ok {
 		_ = writeReply(client, replyGeneral, nil)
@@ -179,7 +180,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 	}
 	defer relay.Close()
 
-	upstreams := make(map[string]net.PacketConn, 2)
+	upstreams := make(map[string]*udpUpstream, 2)
 	for _, upstreamNetwork := range []string{"udp4", "udp6"} {
 		upstream, listenErr := packetDialer.ListenPacket(upstreamNetwork, ":0")
 		if listenErr != nil {
@@ -189,7 +190,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 			}
 			continue
 		}
-		upstreams[upstreamNetwork] = upstream
+		upstreams[upstreamNetwork] = &udpUpstream{PacketConn: upstream}
 		defer upstream.Close()
 	}
 	if len(upstreams) == 0 {
@@ -208,18 +209,26 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 		err    error
 	}
 	packets := make(chan datagram, len(upstreams)+1)
-	associationDone := make(chan struct{})
-	defer close(associationDone)
+	requests := make(chan []byte, 64)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		_ = client.Close()
+		_ = relay.Close()
+		for _, upstream := range upstreams {
+			_ = upstream.Close()
+		}
+		workers.Wait()
+	}()
 	readPackets := func(source string, connection net.PacketConn) {
+		defer workers.Done()
+		buffer := make([]byte, 64*1024)
 		for {
-			buffer := make([]byte, 64*1024)
 			n, address, readErr := connection.ReadFrom(buffer)
 			packet := datagram{data: append([]byte(nil), buffer[:n]...), from: address, source: source, err: readErr}
 			select {
 			case packets <- packet:
 			case <-ctx.Done():
-				return
-			case <-associationDone:
 				return
 			}
 			if readErr != nil {
@@ -227,6 +236,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 			}
 		}
 	}
+	workers.Add(len(upstreams) + 2)
 	go readPackets("local", relay)
 	for upstreamNetwork, upstream := range upstreams {
 		go readPackets(upstreamNetwork, upstream)
@@ -234,15 +244,45 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 	var clientUDPAddress net.Addr
 	controlClosed := make(chan struct{})
 	go func() {
+		defer workers.Done()
 		_, _ = io.Copy(io.Discard, client)
 		close(controlClosed)
 	}()
+	// DNS resolution and blocked VPN writes must not stall return traffic.
+	// Bound both the queue and worker count; excess UDP packets may be dropped.
+	for range 4 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case data := <-requests:
+					if ctx.Err() != nil {
+						return
+					}
+					requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					err := s.forwardUDPRequest(requestCtx, data, upstreams)
+					cancel()
+					if err != nil && ctx.Err() == nil {
+						s.logger.Printf("[socks5] UDP request error: %v", err)
+					}
+				}
+			}
+		}()
+	}
+	idleTimeout, _ := s.config.Get().SOCKS5.IdleTimeoutDuration()
+	idle := time.NewTimer(idleTimeout)
+	defer idle.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-controlClosed:
+			return nil
+		case <-idle.C:
 			return nil
 		case packet := <-packets:
 			if packet.err != nil {
@@ -251,13 +291,12 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 				}
 				return fmt.Errorf("read SOCKS5 UDP %s datagram: %w", packet.source, packet.err)
 			}
+			idle.Reset(idleTimeout)
 			if packet.source == "local" {
 				clientUDPAddress = packet.from
-				requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				err := s.forwardUDPRequest(requestCtx, packet.data, upstreams)
-				cancel()
-				if err != nil {
-					s.logger.Printf("[socks5] UDP request error: %v", err)
+				select {
+				case requests <- packet.data:
+				default:
 				}
 				continue
 			}
@@ -269,6 +308,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 			if clientUDPAddress == nil {
 				continue
 			}
+			_ = relay.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if _, err := relay.WriteTo(response, clientUDPAddress); err != nil {
 				s.logger.Printf("[socks5] write UDP response: %v", err)
 			}
@@ -276,7 +316,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 	}
 }
 
-func (s *Server) forwardUDPRequest(ctx context.Context, data []byte, upstreams map[string]net.PacketConn) error {
+func (s *Server) forwardUDPRequest(ctx context.Context, data []byte, upstreams map[string]*udpUpstream) error {
 	host, port, payload, err := parseUDPRequest(data)
 	if err != nil {
 		return err
@@ -308,6 +348,16 @@ func (s *Server) forwardUDPRequest(ctx context.Context, data []byte, upstreams m
 	upstream := upstreams[network]
 	if upstream == nil {
 		return fmt.Errorf("VPN session does not support %s datagrams", network)
+	}
+	upstream.writeMu.Lock()
+	defer upstream.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := upstream.SetWriteDeadline(deadline); err != nil {
+			return err
+		}
 	}
 	if _, err := upstream.WriteTo(payload, destination); err != nil {
 		return fmt.Errorf("write VPN UDP datagram to %s: %w", destination, err)
