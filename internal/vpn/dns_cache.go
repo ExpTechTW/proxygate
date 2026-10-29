@@ -46,6 +46,21 @@ func (s *dnsSession) Close() error {
 	return s.Session.Close()
 }
 
+func (s *dnsSession) Diagnostics() map[string]uint64 {
+	var result map[string]uint64
+	if provider, ok := s.Session.(interface{ Diagnostics() map[string]uint64 }); ok {
+		result = provider.Diagnostics()
+	}
+	if result == nil {
+		result = make(map[string]uint64)
+	}
+	s.mu.Lock()
+	result["dns_cached"] = uint64(len(s.cache))
+	result["dns_pending"] = uint64(len(s.pending))
+	s.mu.Unlock()
+	return result
+}
+
 func (s *dnsSession) ListenPacket(network, address string) (net.PacketConn, error) {
 	packets, ok := s.Session.(packetSession)
 	if !ok {

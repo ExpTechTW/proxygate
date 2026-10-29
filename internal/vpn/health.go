@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
@@ -31,8 +32,23 @@ func (h *HealthChecker) CheckSession(ctx context.Context, session Session) error
 
 func (h *HealthChecker) check(ctx context.Context, session Session) error {
 	settings := h.config.Get()
+	started := time.Now()
 	err := probeSessionHealth(ctx, session, settings)
 	h.manager.SetLastHealth(time.Now())
+	if session != nil && ctx.Err() == nil {
+		h.manager.mu.RLock()
+		current := h.manager.session == session
+		ip, protocol := h.manager.node.IP, h.manager.protocol
+		h.manager.mu.RUnlock()
+		if current {
+			var diagnostics map[string]uint64
+			if provider, ok := session.(interface{ Diagnostics() map[string]uint64 }); ok {
+				diagnostics = provider.Diagnostics()
+			}
+			h.manager.logger.Printf("[vpn] health node=%s protocol=%s ok=%t elapsed=%s goroutines=%d stats=%v",
+				ip, protocol, err == nil, time.Since(started).Round(time.Millisecond), runtime.NumGoroutine(), diagnostics)
+		}
+	}
 	return err
 }
 

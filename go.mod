@@ -13,7 +13,7 @@ require (
 require (
 	github.com/anchore/go-lzo v0.1.1 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
-	github.com/bclswl0827/govpn v0.4.1
+	github.com/bclswl0827/govpn v0.4.2
 	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/gofiber/schema v1.8.3 // indirect
